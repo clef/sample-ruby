@@ -1,0 +1,20 @@
+<html>
+  <head>
+  </head>
+  <body>
+    <% if @user %>
+        Current user: <br>
+        ID: <%= @user.id %> <br>
+        email: <%= @user.email %> <br>
+        Clef ID: <%= @user.clef_id %> <br>
+        <a href="/logout">logout</a>
+    <% else %>
+      <h2>Sign in with Clef</h2>
+      <script type='text/javascript'
+      class='clef-button'
+      src='https://clef.io/v2/clef.js'
+      data-app-id='58247f018c3fdac32abdacddfcfaf8fc'
+      data-redirect-url='http://localhost:4567/login'></script>
+    <% end %>
+  </body>
+</html>
