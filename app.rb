@@ -1,71 +1,115 @@
 require 'sinatra'
 require 'httparty'
 require 'json'
-require 'data_mapper'
 
-DataMapper.setup(:default, 'sqlite::memory:')
+require_relative 'models/user'
 
-class User
-  include DataMapper::Resource
-
-  property :id,         Serial    # An auto-increment integer key
-  property :email,      String    # The user's email
-  property :clef_id,    Integer   # The user's Clef ID
+##
+# Configuration for the application
+#
+configure do
+    enable :sessions, :logging
+    set :session_secret, 'REPLACE THIS IN YOUR APP'
+    set :clef_api_base, 'https://clef.io/api/v1'
+    set :clef_app_id, '58247f018c3fdac32abdacddfcfaf8fc'
+    set :clef_app_secret, '2ef51ea751ae2bb36ffdb2a63016c6bb'
 end
 
-DataMapper.auto_upgrade!
+##
+# Check if the user is in the session or has been logged out by Clef
+#
+# Read more about how this works here: http://docs.getclef.com/v1.0/docs/overview
+#
+before do
+    if session[:user] and @user = User.get(session[:user])
+        if session[:logged_in_at] and @user.logged_out_at and @user.logged_out_at > session[:logged_in_at]
+            @user = nil
+            session.delete(:logged_in_at)
+            session.delete(:user)
+        end
+    end
+end
 
-APP_ID = '58247f018c3fdac32abdacddfcfaf8fc'
-APP_SECRET = '2ef51ea751ae2bb36ffdb2a63016c6bb'
-
-enable :sessions, :logging
-
+##
+# Render the index template which either shows the Clef button or user information
+#
 get '/' do
-    @user = User.get(session[:user]) if session[:user]
     erb :index
 end
 
-get '/logout' do
-    session.delete(:user)
-    erb :index
-end
+##
+# Receive the Clef login callback and log the user in.
+#
+# Read more here: http://docs.getclef.com/v1.0/docs/authenticating-users
+#
+get '/callback/login' do
+    return redirect to('/') if @user
 
-get '/login' do
     code = params[:code]
-    p code
     data = {
         body: {
             code: code,
-            app_id: APP_ID,
-            app_secret: APP_SECRET
+            app_id: settings.clef_app_id,
+            app_secret: settings.clef_app_secret
         }
     }
 
-    url = "https://clef.io/api/v1/authorize"
-
-    response = HTTParty.post(url, data)
-
-if response['success']
-    access_token = response['access_token']
-
-    url = "https://clef.io/api/v1/info?access_token=#{access_token}"
-
-    response = HTTParty.get(url)
+    response = HTTParty.post("#{settings.clef_api_base}/authorize", data)
 
     if response['success']
-        info = response['info']
-        unless @user = User.first(clef_id: info['id'])
-            @user = User.create(
-                email: info['email'],
-                clef_id: info['id']
-            )
+        access_token = response['access_token']
+
+        url = "#{settings.clef_api_base}/info?access_token=#{access_token}"
+        response = HTTParty.get(url)
+
+        if response['success']
+
+            info = response['info']
+            unless @user = User.first(clef_id: info['id'])
+                @user = User.create(
+                    email: info['email'],
+                    clef_id: info['id']
+                )
+            end
+
+            session[:logged_in_at] = Time.now.to_i
+            session[:user] = @user.id
+
+            redirect to('/')
+        else
+            status 500
+            response['error']
         end
-        session[:user] = @user.id
-        erb :index
     else
-        p response['error']
+        status 500
+        response['error']
     end
-else
-    p response['error']
 end
+
+##
+# Receive the Clef logout webhook and log the user out.
+#
+# Read more here: http://docs.getclef.com/v1.0/docs/handling-the-logout-webhook
+#
+post '/callback/logout' do
+    content_type :json
+
+    data = {
+        body: {
+            logout_token: params[:logout_token],
+            app_id: settings.clef_app_id,
+            app_secret: settings.clef_app_secret
+        }
+    }
+
+    response = HTTParty.post("#{settings.clef_api_base}/logout", data)
+
+    if response['success']
+        user = User.first(clef_id: response['clef_id'])
+        user.update(logged_out_at: Time.now.to_i)
+        { success: true }.to_json
+    else
+        status 500
+        { error: response['error'] }.to_json
+    end
 end
