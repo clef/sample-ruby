@@ -1,6 +1,7 @@
 require 'sinatra'
 require 'httparty'
 require 'json'
+require 'oauth2'
 
 require_relative 'models/user'
 
@@ -14,6 +15,8 @@ configure do
   set :clef_app_id, '58247f018c3fdac32abdacddfcfaf8fc'
   set :clef_app_secret, '2ef51ea751ae2bb36ffdb2a63016c6bb'
 end
+
+
 
 ##
 # Check if the user is in the session or has been logged out by Clef
@@ -45,45 +48,49 @@ end
 get '/callback/login' do
   return redirect to('/') if @user
 
-  code = params[:code]
-  data = {
-    body: {
-      code: code,
-      app_id: settings.clef_app_id,
-      app_secret: settings.clef_app_secret
-    }
-  }
+  oauth_client = OAuth2::Client.new(
+    settings.clef_app_id,
+    settings.clef_app_secret,
+    site: 'https://clef.io/api/v1',
+    token_url: 'authorize'
+  )
 
-  response = HTTParty.post("#{settings.clef_api_base}/authorize", data)
+  begin
+    access_token = oauth_client.auth_code.get_token(
+      params[:code],
+      {}, # don't pass in any params
+      param_name: 'access_token',
+      mode: :query
+    )
 
-  if response['success']
-    access_token = response['access_token']
+    data = access_token.get('info').parsed
+    info = data['info']
 
-    url = "#{settings.clef_api_base}/info?access_token=#{access_token}"
-    response = HTTParty.get(url)
-
-    if response['success']
-
-      info = response['info']
-      unless @user = User.first(clef_id: info['id'])
-        @user = User.create(
-          email: info['email'],
-          clef_id: info['id']
-        )
-      end
-
-      session[:logged_in_at] = Time.now.to_i
-      session[:user] = @user.id
-
-      redirect to('/')
-    else
-      status 500
-      response['error']
+    unless @user = User.first(clef_id: info['id'])
+      @user = User.create(
+        email: info['email'],
+        clef_id: info['id']
+      )
     end
-  else
+
+    session[:logged_in_at] = Time.now.to_i
+    session[:user] = @user.id
+
+    redirect to('/')
+  rescue OAuth2::Error => e
     status 500
-    response['error']
+    case e.code
+      when "Invalid OAuth Code." then
+        'Invalid OAuth Code. This could happen if the code has already been consumed or has expired.'
+      when "Invalid App ID." then
+        'Invalid App ID. This could happen if you are not passing in a valid Clef application ID.'
+      when "Invalid App Secret." then
+        'Invalid App Secret. This could happen if you are not passing in a valid Clef application secret or it does not match the application ID you are passing in.'
+      else
+        e.to_s
+    end
   end
+
 end
 
 ##
