@@ -2,6 +2,7 @@ require 'sinatra'
 require 'httparty'
 require 'json'
 require 'oauth2'
+require 'rack/csrf'
 
 require_relative 'models/user'
 
@@ -14,9 +15,19 @@ configure do
   set :clef_api_base, 'https://clef.io/api/v1'
   set :clef_app_id, '58247f018c3fdac32abdacddfcfaf8fc'
   set :clef_app_secret, '2ef51ea751ae2bb36ffdb2a63016c6bb'
+
+  use Rack::Csrf, :raise => true, skip: ['POST:/callback/logout']
 end
 
+helpers do
+  def csrf_token
+    Rack::Csrf.csrf_token(env)
+  end
+end
 
+def validate_state!
+  halt(403, "Invalid CSRF token") unless Rack::Csrf.csrf_token(env) == params['state']
+end
 
 ##
 # Check if the user is in the session or has been logged out by Clef
@@ -46,6 +57,8 @@ end
 # Read more here: http://docs.getclef.com/v1.0/docs/authenticating-users
 #
 get '/callback/login' do
+  validate_state!
+
   return redirect to('/') if @user
 
   oauth_client = OAuth2::Client.new(
@@ -112,7 +125,7 @@ post '/callback/logout' do
   response = HTTParty.post("#{settings.clef_api_base}/logout", data)
 
   if response['success']
-    user = User.first(clef_id: response['clef_id'])
+    user = User.first(clef_id: response['clef_id'].to_s)
     user.update(logged_out_at: Time.now.to_i)
     { success: true }.to_json
   else
