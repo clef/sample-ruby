@@ -15,7 +15,7 @@
       src='https://clef.io/v3/clef.js'
       data-app-id='<%= settings.clef_app_id %>'
       data-redirect-url='<%= url("callback/login") %>'
-      data-state='<%= csrf_token %>'></script>
+      data-state='<%= state_parameter %>'></script>
     <% end %>
   </body>
 </html>
